@@ -6,6 +6,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# This workflow needs nothing but the source. Pinned explicitly so it stays
+# read-only regardless of the account-level default.
+permissions:
+  contents: read
+
 jobs:
   worker:
     name: lint + tests

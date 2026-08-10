@@ -51,10 +51,13 @@ ok "Zammad is set up"
 AUTH=(-u "$ADMIN_EMAIL:$ADMIN_PASSWORD")
 
 # --- 3. mint an API token --------------------------------------------------
-log "Creating an API token for the worker"
+# ticket.agent is everything the worker needs: update a ticket, add tags, add
+# an article, read /users/me. It deliberately does NOT include admin — group and
+# priority are sent to Zammad by name, so the worker never reads /api/v1/groups.
+log "Creating an API token for the worker (ticket.agent only)"
 TOKEN=$(curl -fsS "${AUTH[@]}" -H 'Content-Type: application/json' \
   -X POST "$ZAMMAD_URL/api/v1/user_access_token" \
-  -d '{"name":"ai-triage-worker","permission":["admin","ticket.agent"]}' | jqp 'd["token"]')
+  -d '{"name":"ai-triage-worker","permission":["ticket.agent"]}' | jqp 'd["token"]')
 [ -n "$TOKEN" ] || fail "could not create an API token (check the admin password)"
 ok "token created"
 
@@ -100,7 +103,6 @@ if [ -z "$HOOK_ID" ]; then
 {
   "name": "$HOOK_NAME",
   "endpoint": "$WORKER_INTERNAL_URL/webhook/zammad",
-  "ssl_verify": false,
   "note": "Created by scripts/smoke.sh",
   "active": true
 }

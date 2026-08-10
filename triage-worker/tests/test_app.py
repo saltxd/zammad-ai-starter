@@ -60,7 +60,7 @@ class StubZammad:
     async def update_ticket(self, ticket_id, *, group=None, priority=None):
         if self.fail:
             raise ZammadError("boom")
-        payload = {"group_id": 2, "priority_id": 3, "_group": group, "_priority": priority}
+        payload = {"group": group, "priority": priority}
         self.updates.append({"ticket_id": ticket_id, **payload})
         return payload
 
@@ -141,15 +141,7 @@ def test_confident_classification_is_written_back(make_client):
     assert body["priority"] == "3 high"
     assert body["tags"] == ["network"]
 
-    assert zammad.updates == [
-        {
-            "ticket_id": 42,
-            "group_id": 2,
-            "priority_id": 3,
-            "_group": "2nd Level",
-            "_priority": "3 high",
-        }
-    ]
+    assert zammad.updates == [{"ticket_id": 42, "group": "2nd Level", "priority": "3 high"}]
     assert zammad.tags == [(42, ("network",))]
     assert len(zammad.notes) == 1
     assert "Whole office affected." in zammad.notes[0][1]

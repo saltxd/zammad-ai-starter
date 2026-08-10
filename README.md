@@ -73,8 +73,11 @@ compose stack that's `triage-worker`; elsewhere it's your host and port.
 | Action | Notification → Webhook → *(the webhook above)* |
 
 Then set `TRIAGE_GROUPS` in `.env` to the group names that exist in *your*
-Zammad, exactly as spelled there. The worker resolves them to IDs at startup and
-fails loudly on a name that doesn't exist, rather than silently doing nothing.
+Zammad, exactly as spelled there. Group and priority are sent to Zammad
+by name; it rejects an unknown one with `422 No lookup value found`, so a typo
+surfaces on the first ticket instead of silently doing nothing. That also keeps
+the worker's API token on `ticket.agent` — reading `/api/v1/groups` to resolve
+names client-side would require an admin-scoped token.
 
 ## Configuration
 
@@ -112,7 +115,7 @@ learn more about your own queue names than about the model.
 | [`webhook.py`](triage-worker/triage_worker/webhook.py) | Pull the ticket out of Zammad's payload. Pure, tolerant of shape differences. |
 | [`classify.py`](triage-worker/triage_worker/classify.py) | The prompt, the JSON schema, the response parser, the keyword fallback. Pure. |
 | [`providers.py`](triage-worker/triage_worker/providers.py) | Claude and Ollama behind one three-line protocol, plus the fallback chain. |
-| [`zammad.py`](triage-worker/triage_worker/zammad.py) | Four REST calls: resolve group, resolve priority, update, tag. |
+| [`zammad.py`](triage-worker/triage_worker/zammad.py) | Three REST calls: update the ticket, tag it, add the note. |
 | [`main.py`](triage-worker/triage_worker/main.py) | FastAPI wiring, signature verification, and the two safety policies. |
 
 The prompt and the reasoning behind each line of it are in
@@ -132,7 +135,7 @@ never write); a Zammad write failure is logged and acknowledged.
 
 ### Tests
 
-70 tests, no network, no API key:
+No network, no API key:
 
 ```bash
 cd triage-worker
@@ -140,10 +143,10 @@ python3 -m venv .venv && ./.venv/bin/pip install -e ".[dev]"
 ./.venv/bin/pytest
 ```
 
-They cover the cases that actually happen — fenced JSON, a chatty preamble
-around the JSON, a queue the model invented, a confidence of `85` instead of
-`0.85`, tags as a comma-string, an HTML article body, a webhook payload we can't
-parse, a signature computed over re-serialised JSON. That last one is why
+All 78 cover cases that actually happen — fenced JSON, a chatty preamble around
+the JSON, a queue the model invented, a confidence of `85` instead of `0.85`,
+tags as a comma-string, an HTML article body, a webhook payload we can't parse,
+a signature computed over re-serialised JSON. That last one is why
 `verify_signature()` takes raw bytes.
 
 ## Going to production
@@ -156,8 +159,6 @@ Things this repo does **not** do for you:
 - **Set `ZAMMAD_WEBHOOK_SECRET`.** Blank means any host that can reach the worker
   can drive it. Set it here and in the Zammad webhook's HMAC token field.
 - **Terminate TLS.** Put both services behind a reverse proxy you trust.
-- **Scope the API token.** `smoke.sh` mints an `admin` token for convenience.
-  The worker only needs `ticket.agent`.
 - **Add Elasticsearch.** `ELASTICSEARCH_ENABLED=false` means Zammad searches the
   database. Fine for a demo, slow for a real queue.
 - **Back up Postgres.** The compose file keeps data in named volumes and takes
