@@ -2,7 +2,8 @@
 name = "zammad-triage-worker"
 version = "1.0.0"
 description = "AI triage worker for Zammad: classify inbound tickets and write back group, priority, and tags."
-readme = "../README.md"
+# No `readme` key: it must point inside this directory, and the project README
+# lives one level up. setuptools rejects a path outside the project root.
 license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
