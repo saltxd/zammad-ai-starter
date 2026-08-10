@@ -1,0 +1,14 @@
+# Local configuration — contains API keys and the Zammad token.
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# macOS
+.DS_Store

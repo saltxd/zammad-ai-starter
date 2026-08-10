@@ -1,0 +1,44 @@
+{
+  "Users": [
+    {
+      "login": "admin@example.com",
+      "firstname": "Demo",
+      "lastname": "Admin",
+      "email": "admin@example.com",
+      "password": "zammad-demo-2026"
+    }
+  ],
+  "Groups": [
+    {
+      "name": "Users",
+      "users": [
+        "admin@example.com"
+      ]
+    },
+    {
+      "name": "2nd Level",
+      "users": [
+        "admin@example.com"
+      ]
+    },
+    {
+      "name": "Billing",
+      "users": [
+        "admin@example.com"
+      ]
+    }
+  ],
+  "Settings": [
+    {
+      "name": "product_name",
+      "value": "AI-Native Zammad Starter"
+    },
+    {
+      "name": "system_online_service",
+      "value": false
+    }
+  ],
+  "TextModuleLocale": {
+    "Locale": "en-us"
+  }
+}

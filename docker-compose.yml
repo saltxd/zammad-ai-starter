@@ -1,0 +1,177 @@
+# AI-Native Zammad starter — Zammad + an AI triage worker, one command.
+#
+# Written from the container's own entrypoint contract rather than copied, so
+# every variable below is one the Zammad image actually reads. Two that are
+# easy to get wrong:
+#
+#   AUTOWIZARD_RELATIVE_PATH  The image's built-in default is a *quoted* string
+#                             ('tmp/auto_wizard.json'), which resolves to a path
+#                             containing literal quotes. Always set it yourself.
+#   var/                      zammad-init writes the autowizard file; the rails
+#                             server reads it. They are different containers, so
+#                             the path has to live on the shared volume.
+
+name: zammad-ai-starter
+
+x-zammad-environment: &zammad-environment
+  MEMCACHE_SERVERS: zammad-memcached:11211
+  REDIS_URL: redis://zammad-redis:6379
+  POSTGRESQL_HOST: zammad-postgresql
+  POSTGRESQL_USER: ${POSTGRES_USER:-zammad}
+  POSTGRESQL_PASS: ${POSTGRES_PASS:-zammad}
+  POSTGRESQL_DB: ${POSTGRES_DB:-zammad_production}
+  # Elasticsearch is optional; without it Zammad searches the database. Set
+  # ELASTICSEARCH_ENABLED=true and add the service if you need fast search.
+  ELASTICSEARCH_ENABLED: "false"
+  AUTOWIZARD_RELATIVE_PATH: var/auto_wizard.json
+  AUTOWIZARD_JSON: ${AUTOWIZARD_JSON:-}
+  RAILS_TRUSTED_PROXIES: "127.0.0.1,::1,172.16.0.0/12,192.168.0.0/16,10.0.0.0/8"
+
+x-zammad-service: &zammad-service
+  image: ghcr.io/zammad/zammad:${ZAMMAD_VERSION:-6.3.1-146}
+  environment: *zammad-environment
+  restart: unless-stopped
+  volumes:
+    - zammad-storage:/opt/zammad/storage
+    - zammad-var:/opt/zammad/var
+  depends_on:
+    zammad-postgresql:
+      condition: service_healthy
+
+services:
+  # --- data stores -------------------------------------------------------
+  zammad-postgresql:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-zammad}
+      POSTGRES_PASSWORD: ${POSTGRES_PASS:-zammad}
+      POSTGRES_DB: ${POSTGRES_DB:-zammad_production}
+    volumes:
+      - postgresql-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-zammad}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  zammad-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  zammad-memcached:
+    image: memcached:1.6-alpine
+    restart: unless-stopped
+    command: memcached -m 256M
+
+  # --- zammad ------------------------------------------------------------
+  # /opt/zammad/var and /opt/zammad/storage don't exist in the image, so Docker
+  # creates them as root-owned empty directories when the named volumes mount —
+  # and the container runs as uid 1000. Without this chown, zammad-init fails
+  # to write the autowizard file (silently, mid-migration) and attachment
+  # storage is read-only. One-shot, runs before anything else.
+  zammad-volume-permissions:
+    image: alpine:3.20
+    command: ["sh", "-c", "chown -R 1000:1000 /opt/zammad/var /opt/zammad/storage"]
+    restart: "no"
+    volumes:
+      - zammad-storage:/opt/zammad/storage
+      - zammad-var:/opt/zammad/var
+
+  # Runs migrations and seeds, then exits. Every other Zammad service waits
+  # for it to finish successfully.
+  zammad-init:
+    <<: *zammad-service
+    command: ["zammad-init"]
+    restart: on-failure
+    depends_on:
+      zammad-volume-permissions:
+        condition: service_completed_successfully
+      zammad-postgresql:
+        condition: service_healthy
+      zammad-redis:
+        condition: service_healthy
+
+  zammad-railsserver:
+    <<: *zammad-service
+    command: ["zammad-railsserver"]
+    depends_on:
+      zammad-init:
+        condition: service_completed_successfully
+
+  zammad-scheduler:
+    <<: *zammad-service
+    command: ["zammad-scheduler"]
+    depends_on:
+      zammad-init:
+        condition: service_completed_successfully
+
+  zammad-websocket:
+    <<: *zammad-service
+    command: ["zammad-websocket"]
+    depends_on:
+      zammad-init:
+        condition: service_completed_successfully
+
+  zammad-nginx:
+    <<: *zammad-service
+    command: ["zammad-nginx"]
+    ports:
+      - "${ZAMMAD_PORT:-8080}:8080"
+    depends_on:
+      zammad-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "curl -fsS http://localhost:8080/api/v1/getting_started > /dev/null"
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 60s
+
+  # --- the interesting part ----------------------------------------------
+  triage-worker:
+    build: ./triage-worker
+    restart: unless-stopped
+    ports:
+      - "${TRIAGE_PORT:-8000}:8000"
+    environment:
+      ZAMMAD_URL: http://zammad-nginx:8080
+      ZAMMAD_TOKEN: ${ZAMMAD_TOKEN:-}
+      ZAMMAD_USER: ${ZAMMAD_USER:-}
+      ZAMMAD_PASSWORD: ${ZAMMAD_PASSWORD:-}
+      ZAMMAD_WEBHOOK_SECRET: ${ZAMMAD_WEBHOOK_SECRET:-}
+      AI_PROVIDER: ${AI_PROVIDER:-anthropic,ollama}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5}
+      ANTHROPIC_EFFORT: ${ANTHROPIC_EFFORT:-low}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1}
+      TRIAGE_GROUPS: ${TRIAGE_GROUPS:-Users,2nd Level,Billing}
+      TRIAGE_DEFAULT_GROUP: ${TRIAGE_DEFAULT_GROUP:-Users}
+      TRIAGE_PRIORITIES: ${TRIAGE_PRIORITIES:-1 low,2 normal,3 high}
+      TRIAGE_DEFAULT_PRIORITY: ${TRIAGE_DEFAULT_PRIORITY:-2 normal}
+      TRIAGE_TAGS: ${TRIAGE_TAGS:-access,billing,bug,hardware,how-to,needs-review,network,security}
+      TRIAGE_CONFIDENCE_THRESHOLD: ${TRIAGE_CONFIDENCE_THRESHOLD:-0.6}
+      TRIAGE_DRY_RUN: ${TRIAGE_DRY_RUN:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    extra_hosts:
+      # Lets the worker reach an Ollama server running on the Docker host.
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      zammad-nginx:
+        condition: service_healthy
+
+volumes:
+  postgresql-data:
+  redis-data:
+  zammad-storage:
+  zammad-var:
