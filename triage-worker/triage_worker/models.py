@@ -21,6 +21,11 @@ class TicketEvent:
     group: str = ""
     priority: str = ""
     state: str = ""
+    tags: tuple[str, ...] = ()
+    article_internal: bool = False
+    article_sender: str = ""
+    article_type: str = ""
+    article_subject: str = ""
 
     def as_prompt_text(self) -> str:
         """Render the ticket as the user turn sent to the model."""

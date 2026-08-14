@@ -94,6 +94,7 @@ annotated list. The ones that matter:
 | `TRIAGE_GROUPS` | `Users,2nd Level,Billing` | Must match Zammad's group names exactly. |
 | `TRIAGE_CONFIDENCE_THRESHOLD` | `0.6` | Below this, the ticket is left untouched. |
 | `TRIAGE_DRY_RUN` | `false` | Classify and log, write nothing. **Start here.** |
+| `TRIAGE_DONE_TAG` | `triaged` | Stamped on every write. A retry or an update trigger is then a no-op. |
 | `ZAMMAD_WEBHOOK_SECRET` | — | Blank disables signature verification. |
 
 ### Run it in dry-run first
@@ -115,13 +116,13 @@ learn more about your own queue names than about the model.
 | [`webhook.py`](triage-worker/triage_worker/webhook.py) | Pull the ticket out of Zammad's payload. Pure, tolerant of shape differences. |
 | [`classify.py`](triage-worker/triage_worker/classify.py) | The prompt, the JSON schema, the response parser, the keyword fallback. Pure. |
 | [`providers.py`](triage-worker/triage_worker/providers.py) | Claude and Ollama behind one three-line protocol, plus the fallback chain. |
-| [`zammad.py`](triage-worker/triage_worker/zammad.py) | Three REST calls: update the ticket, tag it, add the note. |
-| [`main.py`](triage-worker/triage_worker/main.py) | FastAPI wiring, signature verification, and the two safety policies. |
+| [`zammad.py`](triage-worker/triage_worker/zammad.py) | Four REST calls: read tags, update the ticket, tag it, add the note. |
+| [`main.py`](triage-worker/triage_worker/main.py) | FastAPI wiring, signature verification, and the three safety policies. |
 
 The prompt and the reasoning behind each line of it are in
 [TRIAGE-PROMPTS.md](TRIAGE-PROMPTS.md).
 
-### The two rules that make it safe to leave running
+### The three rules that make it safe to leave running
 
 **Never write a low-confidence classification.** The model is told the threshold
 and told what happens below it — a human handles the ticket. Abstaining is a
@@ -133,6 +134,15 @@ that turns into a retry storm is how one bad afternoon becomes an incident. A
 model failure falls back to keyword rules (which report zero confidence, so they
 never write); a Zammad write failure is logged and acknowledged.
 
+**Never re-triage a ticket the worker already touched.** Two things produce a
+second webhook for the same ticket: Zammad retrying the original create payload,
+and an update trigger that fires on the internal note the worker just wrote.
+The first is invisible in the JSON — retries replay the pre-triage payload —
+so the worker stamps a `triaged` tag and checks live tags before it calls the
+model. The second is cheaper: an internal article is dropped without a
+round-trip. Either way the ticket is left alone, which is what you want once
+a human (or the first pass) already owns it.
+
 ### Tests
 
 No network, no API key:
@@ -143,11 +153,13 @@ python3 -m venv .venv && ./.venv/bin/pip install -e ".[dev]"
 ./.venv/bin/pytest
 ```
 
-All 78 cover cases that actually happen — fenced JSON, a chatty preamble around
+All 86 cover cases that actually happen — fenced JSON, a chatty preamble around
 the JSON, a queue the model invented, a confidence of `85` instead of `0.85`,
 tags as a comma-string, an HTML article body, a webhook payload we can't parse,
-a signature computed over re-serialised JSON. That last one is why
-`verify_signature()` takes raw bytes.
+a signature computed over re-serialised JSON, an internal note looping back
+through an update trigger, a retry of the original create payload. That last
+pair is why the worker stamps a `triaged` tag and why `verify_signature()`
+takes raw bytes.
 
 ## Going to production
 

@@ -69,6 +69,7 @@ class Settings:
     dry_run: bool = False
     apply_tags: bool = True
     add_note: bool = True
+    done_tag: str = "triaged"
     request_timeout: float = 60.0
     max_body_chars: int = 6000
 
@@ -89,6 +90,11 @@ class Settings:
         )
         if default_priority not in priorities:
             priorities = [*priorities, default_priority]
+
+        # Blank TRIAGE_DONE_TAG disables the stamp; omitting the var keeps the default.
+        done_tag = (
+            (env.get("TRIAGE_DONE_TAG") or "").strip() if "TRIAGE_DONE_TAG" in env else cls.done_tag
+        )
 
         return cls(
             zammad_url=(env.get("ZAMMAD_URL") or cls.zammad_url).rstrip("/"),
@@ -115,6 +121,7 @@ class Settings:
             dry_run=_flag(env.get("TRIAGE_DRY_RUN"), cls.dry_run),
             apply_tags=_flag(env.get("TRIAGE_APPLY_TAGS"), cls.apply_tags),
             add_note=_flag(env.get("TRIAGE_ADD_NOTE"), cls.add_note),
+            done_tag=done_tag,
             request_timeout=float(env.get("REQUEST_TIMEOUT") or cls.request_timeout),
             max_body_chars=int(env.get("TRIAGE_MAX_BODY_CHARS") or cls.max_body_chars),
         )

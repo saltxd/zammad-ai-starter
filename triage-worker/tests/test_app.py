@@ -51,11 +51,13 @@ class StubChain:
 class StubZammad:
     """Records what would have been written to Zammad."""
 
-    def __init__(self, fail: bool = False):
+    def __init__(self, fail: bool = False, live_tags: tuple[str, ...] = ()):
         self.fail = fail
+        self.live_tags = live_tags
         self.updates: list[dict] = []
         self.tags: list[tuple[int, tuple[str, ...]]] = []
         self.notes: list[tuple[int, str]] = []
+        self.tag_lookups: list[int] = []
 
     async def update_ticket(self, ticket_id, *, group=None, priority=None):
         if self.fail:
@@ -69,6 +71,10 @@ class StubZammad:
 
     async def add_internal_note(self, ticket_id, body):
         self.notes.append((ticket_id, body))
+
+    async def list_tags(self, ticket_id):
+        self.tag_lookups.append(ticket_id)
+        return list(self.live_tags)
 
     async def ping(self):
         return not self.fail
@@ -142,7 +148,7 @@ def test_confident_classification_is_written_back(make_client):
     assert body["tags"] == ["network"]
 
     assert zammad.updates == [{"ticket_id": 42, "group": "2nd Level", "priority": "3 high"}]
-    assert zammad.tags == [(42, ("network",))]
+    assert zammad.tags == [(42, ("network", "triaged"))]
     assert len(zammad.notes) == 1
     assert "Whole office affected." in zammad.notes[0][1]
 
@@ -230,8 +236,77 @@ def test_tags_can_be_disabled(make_client):
     )
     client.post("/webhook/zammad", json=WEBHOOK)
     assert zammad.updates  # group/priority still applied
-    assert zammad.tags == []
     assert zammad.notes == []
+    # The done-tag is operational, not a classification tag — it still stamps.
+    assert any("triaged" in tags for _, tags in zammad.tags)
+
+
+def test_internal_article_is_acknowledged_without_classifying(make_client):
+    """Our own note (or any agent note) must not re-enter the model."""
+    chain = StubChain(model_says())
+    zammad = StubZammad()
+    client = make_client(chain, zammad)
+
+    payload = {
+        "ticket": {"id": 42, "number": "10042", "title": "VPN keeps dropping"},
+        "article": {
+            "body": "Routed to 2nd Level at 3 high (confidence 0.93).",
+            "internal": True,
+            "sender": "Agent",
+            "type": "note",
+            "subject": "AI triage",
+        },
+    }
+    body = client.post("/webhook/zammad", json=payload).json()
+
+    assert body["status"] == "skipped"
+    assert body["skipped_reason"] == "internal article"
+    assert chain.calls == []
+    assert zammad.updates == []
+    assert zammad.notes == []
+
+
+def test_payload_already_tagged_skips_model_and_write(make_client):
+    chain = StubChain(model_says())
+    zammad = StubZammad()
+    client = make_client(chain, zammad)
+
+    payload = {
+        **WEBHOOK,
+        "ticket": {**WEBHOOK["ticket"], "tags": ["triaged"]},
+    }
+    body = client.post("/webhook/zammad", json=payload).json()
+
+    assert body["status"] == "skipped"
+    assert body["skipped_reason"] == "already triaged"
+    assert chain.calls == []
+    assert zammad.updates == []
+    assert zammad.tag_lookups == []  # payload was enough; no extra GET
+
+
+def test_live_tags_catch_a_retried_webhook(make_client):
+    """Zammad retries the original payload, which does not yet contain the tag."""
+    chain = StubChain(model_says())
+    zammad = StubZammad(live_tags=("triaged",))
+    client = make_client(chain, zammad)
+
+    body = client.post("/webhook/zammad", json=WEBHOOK).json()
+
+    assert body["status"] == "skipped"
+    assert body["skipped_reason"] == "already triaged"
+    assert zammad.tag_lookups == [42]
+    assert chain.calls == []
+    assert zammad.updates == []
+
+
+def test_successful_apply_stamps_the_done_tag(make_client):
+    zammad = StubZammad()
+    client = make_client(StubChain(model_says()), zammad)
+
+    client.post("/webhook/zammad", json=WEBHOOK)
+
+    stamped = [tags for _, tags in zammad.tags if "triaged" in tags]
+    assert stamped, "applied tickets must be stamped so a retry is a no-op"
 
 
 # --- signature verification -----------------------------------------------

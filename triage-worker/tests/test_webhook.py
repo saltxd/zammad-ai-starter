@@ -117,3 +117,41 @@ def test_strip_html_collapses_whitespace_and_blank_lines():
 
 def test_strip_html_unescapes_entities():
     assert strip_html("5 &lt; 10 &amp; rising") == "5 < 10 & rising"
+
+
+def test_parses_article_flags_and_ticket_tags():
+    """Loop protection needs to know *which* article fired the trigger."""
+    payload = {
+        "ticket": {
+            "id": 9,
+            "title": "VPN",
+            "tags": ["network", "triaged"],
+        },
+        "article": {
+            "body": "Routed to 2nd Level.",
+            "internal": True,
+            "sender": "Agent",
+            "type": "note",
+            "subject": "AI triage",
+        },
+    }
+    event = parse_webhook(payload)
+    assert event is not None
+    assert event.article_internal is True
+    assert event.article_sender == "Agent"
+    assert event.article_type == "note"
+    assert event.article_subject == "AI triage"
+    assert event.tags == ("network", "triaged")
+
+
+def test_parses_tags_sent_as_a_comma_string():
+    event = parse_webhook({"ticket": {"id": 1, "title": "t", "tags": "access, billing"}})
+    assert event is not None
+    assert event.tags == ("access", "billing")
+
+
+def test_customer_article_defaults_are_safe_to_triage():
+    event = parse_webhook(NESTED)
+    assert event is not None
+    assert event.article_internal is False
+    assert event.tags == ()

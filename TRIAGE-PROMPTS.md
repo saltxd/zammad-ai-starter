@@ -23,6 +23,12 @@ No conversation history, no prior tickets, no agent notes. One ticket, one
 classification, one call. That keeps the cost per ticket flat and predictable,
 and it means a bad classification can never poison the next one.
 
+The worker also refuses to send its own output back in. An internal article
+(the note it just wrote, or any agent note) is acknowledged and dropped
+before the model is called. Combined with the `triaged` stamp, a trigger that
+fires on ticket update cannot turn into a loop of the model classifying its
+own rationale.
+
 ## The response contract
 
 ```json

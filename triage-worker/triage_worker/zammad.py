@@ -81,6 +81,19 @@ class ZammadClient:
         await self._request("PUT", f"/api/v1/tickets/{ticket_id}", json=payload)
         return payload
 
+    async def list_tags(self, ticket_id: int) -> list[str]:
+        """Current tags on the ticket. Used to make webhook retries a no-op."""
+        data = await self._request(
+            "GET",
+            "/api/v1/tags",
+            params={"object": "Ticket", "o_id": ticket_id},
+        )
+        if isinstance(data, dict):
+            tags = data.get("tags")
+            if isinstance(tags, list):
+                return [str(tag) for tag in tags if tag]
+        return []
+
     async def add_tags(self, ticket_id: int, tags: tuple[str, ...] | list[str]) -> None:
         for tag in tags:
             await self._request(

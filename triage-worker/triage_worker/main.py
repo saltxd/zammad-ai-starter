@@ -2,7 +2,7 @@
 
 The request path is deliberately short. Everything with a decision in it lives
 in :mod:`classify` (pure) or :mod:`zammad` (I/O); this module wires them
-together and owns two policies:
+together and owns three policies:
 
 1. Never 500 on a webhook. Zammad retries failures, and a retry storm on top of
    a provider outage is how one bad afternoon becomes an incident. Failures are
@@ -10,6 +10,9 @@ together and owns two policies:
 2. Never write a low-confidence classification. Below the threshold the ticket
    is left exactly as the customer sent it, which is the state a human agent
    already knows how to handle.
+3. Never re-triage a ticket the worker already touched. An update trigger that
+   fires on the internal note, or Zammad retrying the original create payload,
+   must be a no-op — not a second model call and a second note.
 """
 
 from __future__ import annotations
@@ -80,6 +83,39 @@ class Triager:
             tags=settings.tags,
         )
 
+    def _untouched(self, event: TicketEvent) -> Classification:
+        """A placeholder classification for tickets we refused to look at."""
+        return Classification(
+            group=event.group or self.settings.default_group,
+            priority=event.priority or self.settings.default_priority,
+            tags=event.tags,
+            source="skipped",
+        )
+
+    async def skip_reason(self, event: TicketEvent) -> str:
+        """Why this webhook should not reach the model, or ``""`` to proceed.
+
+        Two cheap checks first (no I/O), then a live tag read. Zammad retries
+        resend the original payload, so the tag on the ticket in that JSON is
+        still the pre-triage set — only the API knows we already stamped it.
+        """
+        if event.article_internal:
+            return "internal article"
+
+        done = self.settings.done_tag
+        if done and done in event.tags:
+            return "already triaged"
+
+        if done and self.zammad is not None and not self.settings.dry_run:
+            try:
+                live = await self.zammad.list_tags(event.ticket_id)
+            except ZammadError as exc:
+                logger.warning("ticket %s: could not read tags: %s", event.ticket_id, exc)
+            else:
+                if done in live:
+                    return "already triaged"
+        return ""
+
     async def classify(self, event: TicketEvent) -> Classification:
         settings = self.settings
         user_turn = event.as_prompt_text()[: settings.max_body_chars]
@@ -141,9 +177,12 @@ class Triager:
             group=classification.group,
             priority=classification.priority,
         )
-        if settings.apply_tags and classification.tags:
-            await self.zammad.add_tags(event.ticket_id, classification.tags)
-            changes["tags"] = list(classification.tags)
+        tags_to_add = list(classification.tags) if settings.apply_tags else []
+        if settings.done_tag and settings.done_tag not in tags_to_add:
+            tags_to_add.append(settings.done_tag)
+        if tags_to_add:
+            await self.zammad.add_tags(event.ticket_id, tags_to_add)
+            changes["tags"] = tags_to_add
         if settings.add_note and classification.reason:
             await self.zammad.add_internal_note(
                 event.ticket_id,
@@ -164,6 +203,15 @@ class Triager:
         return TriageResult(event.ticket_id, classification, applied=True, changes=changes)
 
     async def handle(self, event: TicketEvent) -> TriageResult:
+        reason = await self.skip_reason(event)
+        if reason:
+            logger.info("ticket %s: skipping — %s", event.ticket_id, reason)
+            return TriageResult(
+                event.ticket_id,
+                self._untouched(event),
+                applied=False,
+                skipped_reason=reason,
+            )
         return await self.apply(event, await self.classify(event))
 
 

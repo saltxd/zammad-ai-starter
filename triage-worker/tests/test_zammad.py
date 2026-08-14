@@ -32,6 +32,23 @@ def client_recording(responses: dict[str, httpx.Response] | None = None):
     return client, seen
 
 
+async def test_list_tags_reads_current_ticket_tags():
+    """Retries resend the original payload; live tags are what make them idempotent."""
+    client, seen = client_recording(
+        {"/api/v1/tags": httpx.Response(200, json={"tags": ["network", "triaged"]})}
+    )
+
+    tags = await client.list_tags(42)
+
+    assert tags == ["network", "triaged"]
+    assert len(seen) == 1
+    assert seen[0].method == "GET"
+    assert seen[0].url.path == "/api/v1/tags"
+    assert seen[0].url.params["object"] == "Ticket"
+    assert seen[0].url.params["o_id"] == "42"
+    await client.aclose()
+
+
 async def test_update_sends_group_and_priority_by_name():
     """By name, not by id — that's what keeps the token on ticket.agent."""
     client, seen = client_recording()

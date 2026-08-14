@@ -62,6 +62,30 @@ def _name_of(value: Any) -> str:
     return ""
 
 
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+def _tags_of(ticket: dict[str, Any]) -> tuple[str, ...]:
+    """Zammad sends tags as a list or as a comma-separated string, depending on version."""
+    raw = ticket.get("tags")
+    if raw is None:
+        raw = ticket.get("tag_list")
+    if isinstance(raw, str):
+        items = [part.strip() for part in raw.split(",")]
+    elif isinstance(raw, (list, tuple)):
+        items = [str(item).strip() for item in raw]
+    else:
+        return ()
+    return tuple(item for item in items if item)
+
+
 def _article_body(article: dict[str, Any]) -> str:
     body = article.get("body")
     if not isinstance(body, str):
@@ -107,4 +131,9 @@ def parse_webhook(payload: Any) -> TicketEvent | None:
         group=_name_of(ticket.get("group")),
         priority=_name_of(ticket.get("priority")),
         state=_name_of(ticket.get("state")),
+        tags=_tags_of(ticket),
+        article_internal=_as_bool(article.get("internal")),
+        article_sender=_name_of(article.get("sender")),
+        article_type=str(article.get("type") or article.get("type_id") or "").strip(),
+        article_subject=str(article.get("subject") or "").strip(),
     )
